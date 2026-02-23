@@ -27,16 +27,18 @@ jobs:
       - name: Install gitbook-cli and patch graceful-fs
         run: |
           npm install -g gitbook-cli
-          # Patch the known graceful-fs callback bug
-          POLYFILLS=$(find /usr/local/lib/node_modules/gitbook-cli -name "polyfills.js" -path "*/graceful-fs/*" | head -1)
-          if [ -n "$POLYFILLS" ]; then
-            sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$POLYFILLS"
-            sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$POLYFILLS"
-            sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$POLYFILLS"
-          fi
+          # Patch the known graceful-fs callback bug in gitbook-cli
+          GLOBAL_ROOT=$(npm root -g)
+          for f in $(find "$GLOBAL_ROOT/gitbook-cli" -name "polyfills.js" -path "*/graceful-fs/*" 2>/dev/null); do
+            echo "Patching $f"
+            sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$f"
+            sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$f"
+            sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$f"
+          done
           gitbook fetch 3.2.3
           # Patch graceful-fs inside the installed gitbook version too
           for f in $(find ~/.gitbook -name "polyfills.js" -path "*/graceful-fs/*" 2>/dev/null); do
+            echo "Patching $f"
             sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$f"
             sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$f"
             sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$f"
