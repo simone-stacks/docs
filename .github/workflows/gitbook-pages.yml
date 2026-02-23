@@ -2,7 +2,7 @@ name: Build GitBook & Deploy to Pages
 
 on:
   push:
-    branches: [feat/node-proxy]
+    branches: [feat/node-proxy-preview]
   workflow_dispatch:
 
 permissions:
