@@ -1,4 +1,4 @@
-name: Build GitBook & Deploy to Pages
+name: Build Docs Preview & Deploy to Pages
 
 on:
   push:
@@ -22,59 +22,130 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '12'
+          node-version: '20'
 
-      - name: Install gitbook-cli and patch graceful-fs
+      - name: Preprocess GitBook tags to HTML
         run: |
-          npm install -g gitbook-cli
-          # Patch the known graceful-fs callback bug in gitbook-cli
-          GLOBAL_ROOT=$(npm root -g)
-          for f in $(find "$GLOBAL_ROOT/gitbook-cli" -name "polyfills.js" -path "*/graceful-fs/*" 2>/dev/null); do
-            echo "Patching $f"
-            sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$f"
-            sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$f"
-            sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$f"
-          done
-          gitbook fetch 3.2.3
-          # Patch graceful-fs inside the installed gitbook version too
-          for f in $(find ~/.gitbook -name "polyfills.js" -path "*/graceful-fs/*" 2>/dev/null); do
-            echo "Patching $f"
-            sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$f"
-            sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$f"
-            sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$f"
+          # Convert GitBook-specific template tags to HTML equivalents
+          find docs -name '*.md' -type f | while read -r file; do
+            python3 - "$file" << 'PYEOF'
+          import re, sys
+
+          f = sys.argv[1]
+          with open(f, 'r') as fh:
+              text = fh.read()
+
+          # {% hint style="..." %} ... {% endhint %}
+          text = re.sub(
+              r'\{%\s*hint\s+style="(\w+)"\s*%\}',
+              r'> **\1:**',
+              text
+          )
+          text = re.sub(r'\{%\s*endhint\s*%\}', '', text)
+
+          # {% code title="..." %} ... {% endcode %}
+          text = re.sub(r'\{%\s*code\s+title="([^"]+)"\s*%\}', r'**\1**', text)
+          text = re.sub(r'\{%\s*endcode\s*%\}', '', text)
+
+          # {% tabs %} {% tab title="..." %} ... {% endtab %} {% endtabs %}
+          text = re.sub(r'\{%\s*tabs\s*%\}', '', text)
+          text = re.sub(r'\{%\s*endtabs\s*%\}', '', text)
+          text = re.sub(r'\{%\s*tab\s+title="([^"]+)"\s*%\}', r'#### \1', text)
+          text = re.sub(r'\{%\s*endtab\s*%\}', '', text)
+
+          # {% stepper %} {% step %} ... {% endstep %} {% endstepper %}
+          text = re.sub(r'\{%\s*stepper\s*%\}', '', text)
+          text = re.sub(r'\{%\s*endstepper\s*%\}', '', text)
+          text = re.sub(r'\{%\s*step\s*%\}', '---\n**Step:**', text)
+          text = re.sub(r'\{%\s*endstep\s*%\}', '', text)
+
+          # {% embed url="..." %} -> markdown link
+          text = re.sub(r'\{%\s*embed\s+url="([^"]+)"\s*%\}', r'[\1](\1)', text)
+
+          # {% file src="..." %} -> markdown link
+          text = re.sub(r'\{%\s*file\s+src="([^"]+)"[^%]*%\}', r'[Download](\1)', text)
+
+          # {% content-ref url="..." %} ... {% endcontent-ref %}
+          text = re.sub(r'\{%\s*content-ref\s+url="([^"]+)"\s*%\}', r'[\1](\1)', text)
+          text = re.sub(r'\{%\s*endcontent-ref\s*%\}', '', text)
+
+          # Catch any remaining {% ... %} tags
+          text = re.sub(r'\{%[^%]*%\}', '', text)
+
+          with open(f, 'w') as fh:
+              fh.write(text)
+          PYEOF
           done
 
-      - name: Build all sections
+      - name: Build site with docsify
         run: |
           mkdir -p _site
-          for section in build learn operate press-and-reports reference tutorials; do
-            echo "Building $section..."
-            cd docs/$section
-            gitbook build . ../../_site/$section
-            cd ../..
+          SECTIONS="build learn operate press-and-reports reference tutorials"
+          for section in $SECTIONS; do
+            mkdir -p _site/$section
+            cp -r docs/$section/* _site/$section/
+            # Create docsify index for each section
+            SUMMARY_FILE="docs/$section/SUMMARY.md"
+            cat > _site/$section/index.html << HTMLEOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Stacks Docs - $section</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple.css">
+            <style>
+              .sidebar-nav { font-size: 14px; }
+              .markdown-section { max-width: 900px; }
+            </style>
+          </head>
+          <body>
+            <div id="app"></div>
+            <script>
+              window.\$docsify = {
+                name: 'Stacks Docs - $section',
+                loadSidebar: 'SUMMARY.md',
+                subMaxLevel: 3,
+                homepage: 'README.md',
+                search: 'auto',
+                auto2top: true
+              }
+            </script>
+            <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-toml.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-yaml.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-javascript.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
+          </body>
+          </html>
+          HTMLEOF
           done
 
-      - name: Create index page
-        run: |
+          # Create root index linking to all sections
           cat > _site/index.html << 'HTMLEOF'
           <!DOCTYPE html>
           <html>
           <head>
             <title>Stacks Docs Preview</title>
             <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 80px auto; padding: 0 20px; }
+              body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 80px auto; padding: 0 20px; color: #333; }
               h1 { border-bottom: 2px solid #5546ff; padding-bottom: 10px; }
               a { color: #5546ff; text-decoration: none; }
               a:hover { text-decoration: underline; }
               li { margin: 10px 0; font-size: 18px; }
+              .badge { background: #e8e5ff; color: #5546ff; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 8px; }
             </style>
           </head>
           <body>
             <h1>Stacks Docs Preview</h1>
+            <p>Preview deployment from branch <code>feat/node-proxy-preview</code></p>
             <ul>
               <li><a href="build/">Build</a></li>
               <li><a href="learn/">Learn</a></li>
-              <li><a href="operate/">Operate</a></li>
+              <li><a href="operate/">Operate</a> <span class="badge">new page</span></li>
               <li><a href="press-and-reports/">Press & Reports</a></li>
               <li><a href="reference/">Reference</a></li>
               <li><a href="tutorials/">Tutorials</a></li>
