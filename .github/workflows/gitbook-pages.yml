@@ -1,0 +1,96 @@
+name: Build GitBook & Deploy to Pages
+
+on:
+  push:
+    branches: [feat/node-proxy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '12'
+
+      - name: Install gitbook-cli and patch graceful-fs
+        run: |
+          npm install -g gitbook-cli
+          # Patch the known graceful-fs callback bug
+          POLYFILLS=$(find /usr/local/lib/node_modules/gitbook-cli -name "polyfills.js" -path "*/graceful-fs/*" | head -1)
+          if [ -n "$POLYFILLS" ]; then
+            sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$POLYFILLS"
+            sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$POLYFILLS"
+            sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$POLYFILLS"
+          fi
+          gitbook fetch 3.2.3
+          # Patch graceful-fs inside the installed gitbook version too
+          for f in $(find ~/.gitbook -name "polyfills.js" -path "*/graceful-fs/*" 2>/dev/null); do
+            sed -i 's/fs.stat = statFix(fs.stat)/\/\/fs.stat = statFix(fs.stat)/' "$f"
+            sed -i 's/fs.fstat = statFix(fs.fstat)/\/\/fs.fstat = statFix(fs.fstat)/' "$f"
+            sed -i 's/fs.lstat = statFix(fs.lstat)/\/\/fs.lstat = statFix(fs.lstat)/' "$f"
+          done
+
+      - name: Build all sections
+        run: |
+          mkdir -p _site
+          for section in build learn operate press-and-reports reference tutorials; do
+            echo "Building $section..."
+            cd docs/$section
+            gitbook build . ../../_site/$section
+            cd ../..
+          done
+
+      - name: Create index page
+        run: |
+          cat > _site/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Stacks Docs Preview</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 80px auto; padding: 0 20px; }
+              h1 { border-bottom: 2px solid #5546ff; padding-bottom: 10px; }
+              a { color: #5546ff; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+              li { margin: 10px 0; font-size: 18px; }
+            </style>
+          </head>
+          <body>
+            <h1>Stacks Docs Preview</h1>
+            <ul>
+              <li><a href="build/">Build</a></li>
+              <li><a href="learn/">Learn</a></li>
+              <li><a href="operate/">Operate</a></li>
+              <li><a href="press-and-reports/">Press & Reports</a></li>
+              <li><a href="reference/">Reference</a></li>
+              <li><a href="tutorials/">Tutorials</a></li>
+            </ul>
+          </body>
+          </html>
+          HTMLEOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
