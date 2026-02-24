@@ -25,6 +25,8 @@ A Stacks node deployment typically exposes the following services:
 
 {% hint style="info" %}
 The **P2P ports** (20444, 8333) use custom binary protocols for peer-to-peer communication, not HTTP. You can leave them open directly to the network. The proxy configurations below focus on the **RPC/API ports** which serve HTTP traffic and are the primary target for abuse.
+
+**Optional:** P2P ports can also benefit from rate-limiting. While unlikely, a denial-of-service attack could flood the P2P port so the node only communicates with malicious peers. Adding connection-rate limits on P2P ports won't hurt and provides an extra layer of protection.
 {% endhint %}
 
 ## Configure the Stacks node
@@ -79,6 +81,15 @@ Inter-container communication (e.g. the API receiving events from the blockchain
 ## Nginx
 
 Nginx can serve as a reverse proxy with rate limiting using the `limit_req` module. The configuration below rate-limits the Stacks RPC and Stacks API endpoints.
+
+{% code title="Install Nginx" %}
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nginx
+```
+
+{% endcode %}
 
 {% code title="/etc/nginx/sites-available/stacks-node" %}
 
@@ -139,7 +150,14 @@ HAProxy provides fine-grained connection tracking and abuse detection via [stick
 Adjust `maxconn`, rate thresholds (`ge 25`), stick-table sizes, and expiry times to suit your traffic patterns. The values below are conservative defaults.
 {% endhint %}
 
-### Linux
+{% code title="Install HAProxy" %}
+
+```bash
+sudo apt-get update
+sudo apt-get install -y haproxy
+```
+
+{% endcode %}
 
 {% code title="/etc/haproxy/haproxy.cfg" %}
 
@@ -219,70 +237,6 @@ backend btc_rpc_back
 ```bash
 sudo systemctl enable haproxy
 sudo systemctl start haproxy
-```
-
-{% endcode %}
-
-### macOS
-
-On macOS, install HAProxy via Homebrew. The configuration omits `chroot`, `user`, and `group` directives since HAProxy runs as the current user through `launchd`.
-
-{% code title="Install HAProxy" %}
-
-```bash
-brew install haproxy
-```
-
-{% endcode %}
-
-{% code title="/opt/homebrew/etc/haproxy.cfg" %}
-
-```
-global
-    log 127.0.0.1    local0
-    maxconn 512
-
-defaults
-    log     global
-    mode    http
-    option  httplog
-    option  dontlognull
-    timeout connect 5000
-    timeout client  50000
-    timeout server  50000
-    timeout http-request 10s
-
-backend Abuse
-    stick-table type ip size 100K expire 30m store gpc0,http_req_rate(10s)
-
-frontend stacks_rpc
-    bind *:20443
-    http-request track-sc0 src table Abuse
-    http-request deny deny_status 429 if { src_get_gpc0(Abuse) gt 0 }
-    http-request deny deny_status 429 if { src_http_req_rate(Abuse) ge 25 } { src_inc_gpc0(Abuse) ge 0 }
-    default_backend stacks_rpc_back
-
-backend stacks_rpc_back
-    server stacks-node 127.0.0.1:30443 maxconn 100 check inter 10s
-
-frontend stacks_api
-    bind *:3999
-    http-request track-sc0 src table Abuse
-    http-request deny deny_status 429 if { src_get_gpc0(Abuse) gt 0 }
-    http-request deny deny_status 429 if { src_http_req_rate(Abuse) ge 25 } { src_inc_gpc0(Abuse) ge 0 }
-    default_backend stacks_api_back
-
-backend stacks_api_back
-    server stacks-api 127.0.0.1:33999 maxconn 100 check inter 10s
-```
-
-{% endcode %}
-
-{% code title="Validate and start HAProxy" %}
-
-```bash
-haproxy -c -f /opt/homebrew/etc/haproxy.cfg
-brew services start haproxy
 ```
 
 {% endcode %}
